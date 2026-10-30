@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#172630">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="icon" href="icon-192.png">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pool Vision · Prototype</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+body{margin:0;background:#101820;color:#eef4f7}header{padding:18px 20px;background:#172630;border-bottom:1px solid #30434e}
+h1{margin:0;font-size:24px}header p{margin:5px 0 0;color:#b7c7ce;font-size:13px}
+main{max-width:1050px;margin:auto;padding:16px;display:grid;gap:14px}
+.panel{background:#172630;border:1px solid #30434e;border-radius:14px;padding:14px}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+button,.filelabel,select{background:#254353;color:#fff;border:1px solid #456575;border-radius:9px;padding:10px 13px;font:inherit}
+button{cursor:pointer}button.primary{background:#087f68;border-color:#12a98b}
+button:disabled{opacity:.4;cursor:not-allowed}
+input[type=file]{max-width:100%}.hint{color:#b7c7ce;font-size:13px;line-height:1.45}
+#stage{position:relative;background:#080d11;border-radius:12px;overflow:hidden;min-height:220px;display:grid;place-items:center}
+canvas{display:block;max-width:100%;height:auto;touch-action:manipulation}
+#empty{padding:55px 15px;text-align:center;color:#9fb2bb}
+.status{font-size:14px;color:#c9d9df;min-height:22px;margin-top:8px}
+.steps{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0}
+.step{font-size:12px;padding:6px 9px;border-radius:20px;background:#243b47;color:#b7c7ce}
+.step.active{background:#087f68;color:white}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#c4d2d8;margin-top:10px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px}
+footer{font-size:12px;color:#9fb2bb;padding:0 3px 20px}
+</style></head>
+<body>
+<header><h1>🎱 Pool Vision</h1><p>Prototype d’analyse de trajectoires à partir d’une capture d’écran</p></header>
+<main>
+<section class="panel">
+ <div class="controls">
+  <input id="file" type="file" accept="image/*">
+  <button id="reset">Recommencer</button>
+  <button id="undo">Annuler le dernier point</button>
+ </div>
+ <div class="steps" id="steps">
+  <span class="step active">1 · Bille blanche</span><span class="step">2 · Bille cible</span><span class="step">3 · Poche visée</span><span class="step">4 · Coins de la table (facultatif)</span>
+ </div>
+ <p class="hint" id="instruction">Charge une capture d’écran nette de la table, puis touche le centre de la bille blanche.</p>
+</section>
+<section class="panel">
+ <div id="stage"><div id="empty">Charge une capture d’écran pour commencer.</div><canvas id="canvas" hidden></canvas></div>
+ <div class="legend"><span><i class="dot" style="background:#35d7ff"></i>Bille blanche</span><span><i class="dot" style="background:#ffca55"></i>Bille cible</span><span><i class="dot" style="background:#ff5c77"></i>Poche</span><span><i class="dot" style="background:#9cff8b"></i>Trajectoire calculée</span></div>
+ <div class="status" id="status" aria-live="polite"></div>
+</section>
+<section class="panel">
+ <div class="controls">
+  <label class="hint">Calcul :</label>
+  <select id="route"><option value="direct">Tir direct</option><option value="top">Rebond sur la bande du haut</option><option value="bottom">Rebond sur la bande du bas</option><option value="left">Rebond sur la bande gauche</option><option value="right">Rebond sur la bande droite</option></select>
+  <button class="primary" id="draw" disabled>Calculer la trajectoire</button>
+  <button id="clearLines">Masquer les lignes</button>
+ </div>
+ <p class="hint">Mode guidé : les points sont sélectionnés manuellement sur l’image. Le prototype trace une ligne de visée géométrique et une estimation du point de contact (bille fantôme). Les rebonds sont des constructions géométriques idéalisées, pas une simulation physique complète.</p>
+</section>
+<footer>Prototype local : l’image reste dans ton navigateur. Il ne se connecte pas à 8 Ball Pool et n’automatise aucun tir. Pour de meilleurs résultats, utilise une capture où toute la table est visible.</footer>
+</main>
+<script>
+const file=document.getElementById('file'), canvas=document.getElementById('canvas'), ctx=canvas.getContext('2d');
+const empty=document.getElementById('empty'), status=document.getElementById('status'), instruction=document.getElementById('instruction');
+const steps=[...document.querySelectorAll('.step')], drawBtn=document.getElementById('draw');
+let img=null, points=[], base=null, dims={w:0,h:0};
+const names=['la bille blanche','la bille cible','la poche visée','le coin supérieur gauche','le coin inférieur droit'];
+function msg(t){status.textContent=t}
+function stepUI(){steps.forEach((s,i)=>s.classList.toggle('active',i===Math.min(points.length,3)));instruction.textContent=points.length===0?'Charge une capture d’écran nette de la table, puis touche le centre de la bille blanche.':points.length===1?'Touche le centre de la bille que tu veux empocher.':points.length===2?'Touche le centre de la poche visée.':points.length===3?'Facultatif : touche le coin intérieur supérieur gauche de la surface de jeu (pas le bord extérieur).':'Points définis. Tu peux calculer le tir ou choisir un type de rebond.';drawBtn.disabled=!(img&&points.length>=3)}
+function fit(){let max=canvas.parentElement.clientWidth-2, scale=Math.min(1,max/img.width);canvas.width=Math.round(img.width*scale);canvas.height=Math.round(img.height*scale);dims={w:canvas.width,h:canvas.height};base=document.createElement('canvas');base.width=canvas.width;base.height=canvas.height;base.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height);render()}
+function render(){if(!base)return;ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(base,0,0);points.forEach((p,i)=>{ctx.beginPath();ctx.arc(p.x,p.y,Math.max(7,canvas.width*.009),0,Math.PI*2);ctx.fillStyle=['#35d7ff','#ffca55','#ff5c77','#fff','#fff'][i];ctx.fill();ctx.lineWidth=2;ctx.strokeStyle='#101820';ctx.stroke();ctx.fillStyle='#101820';ctx.font='bold 12px sans-serif';ctx.textAlign='center';ctx.fillText(String(i+1),p.x,p.y+4)});}
+file.addEventListener('change',e=>{let f=e.target.files[0];if(!f)return;let u=URL.createObjectURL(f);img=new Image();img.onload=()=>{points=[];empty.hidden=true;canvas.hidden=false;fit();stepUI();msg('Image chargée. Sélectionne les trois points dans l’ordre indiqué.');URL.revokeObjectURL(u)};img.src=u});
+canvas.addEventListener('click',e=>{if(!img||points.length>=5)return;let r=canvas.getBoundingClientRect(),x=(e.clientX-r.left)*canvas.width/r.width,y=(e.clientY-r.top)*canvas.height/r.height;points.push({x,y});render();stepUI();msg(points.length<3?'Point enregistré. Continue.':points.length===3?'Les trois points essentiels sont définis.':'Coin de table enregistré.')});
+document.getElementById('undo').onclick=()=>{points.pop();render();stepUI();msg('Dernier point annulé.')};
+document.getElementById('reset').onclick=()=>{points=[];if(base)render();stepUI();msg('Sélection réinitialisée.')};
+document.getElementById('clearLines').onclick=()=>{render();msg('Lignes masquées.')};
+function line(a,b,color,width=3,dash=[]){ctx.beginPath();ctx.setLineDash(dash);ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.stroke();ctx.setLineDash([])}
+function calc(){if(points.length<3)return;render();let [cue,obj,pocket]=points;let dx=pocket.x-obj.x,dy=pocket.y-obj.y,len=Math.hypot(dx,dy)||1,ux=dx/len,uy=dy/len;
+ // approximate ball diameter from screenshot width; user may refine in later version
+ let r=Math.max(5,canvas.width*.009), ghost={x:obj.x-ux*r*2,y:obj.y-uy*r*2};
+ const mode=document.getElementById('route').value;
+ if(mode==='direct'){line(cue,ghost,'#9cff8b',3);line(ghost,pocket,'#ffca55',3,[7,5]);}
+ else {
+   // reflect pocket across selected image edge to construct a one-cushion route
+   let target={...pocket}, edge;
+   if(mode==='top'){edge=points[3]?points[3].y:0;target.y=2*edge-pocket.y}
+   if(mode==='bottom'){edge=points[4]?points[4].y:canvas.height;target.y=2*edge-pocket.y}
+   if(mode==='left'){edge=points[3]?points[3].x:0;target.x=2*edge-pocket.x}
+   if(mode==='right'){edge=points[4]?points[4].x:canvas.width;target.x=2*edge-pocket.x}
+   let t=(mode==='top'||mode==='bottom')?(edge-cue.y)/(target.y-cue.y):(edge-cue.x)/(target.x-cue.x);
+   let bounce=(mode==='top'||mode==='bottom')?{x:cue.x+t*(target.x-cue.x),y:edge}:{x:edge,y:cue.y+t*(target.y-cue.y)};
+   line(cue,bounce,'#9cff8b',3);line(bounce,ghost,'#9cff8b',3);line(ghost,pocket,'#ffca55',3,[7,5]);ctx.beginPath();ctx.arc(bounce.x,bounce.y,6,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();
+ }
+ // cue to ghost is cue-ball aiming guide; ghost marker
+ ctx.beginPath();ctx.arc(ghost.x,ghost.y,r,0,Math.PI*2);ctx.strokeStyle='#9cff8b';ctx.lineWidth=2;ctx.stroke();
+ msg('Trajectoire estimée affichée. Ajuste les points si les centres des billes sont approximatifs.');
+}
+drawBtn.onclick=calc;
+window.addEventListener('resize',()=>{if(img)fit()});
+stepUI();
+</script>
+<script>
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+</script>
+</body></html>
